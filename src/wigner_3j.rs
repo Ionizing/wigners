@@ -168,7 +168,7 @@ pub(crate) fn triangle_condition(j1: u32, j2: u32, j3: u32) -> bool {
 }
 
 // reorder j1/m1, j2/m2, j3/m3 such that j1 >= j2 >= j3 and m1 >= 0 or m1 == 0 && m2 >= 0
-pub(crate) fn reorder3j(j1: u32, j2: u32, j3: u32, m1: i32, m2: i32, m3: i32, mut sign: f64) -> (u32, u32, u32, i32, i32, i32, f64) {
+fn reorder3j(j1: u32, j2: u32, j3: u32, m1: i32, m2: i32, m3: i32, mut sign: f64) -> (u32, u32, u32, i32, i32, i32, f64) {
     if j1 < j2 {
         return reorder3j(j2, j1, j3, m2, m1, m3, -sign);
     } else if j2 < j3 {

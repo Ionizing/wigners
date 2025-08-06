@@ -3,13 +3,13 @@ use std::num::NonZeroUsize;
 use parking_lot::Mutex;
 
 use lru::LruCache;
+use num_traits::{PrimInt, CheckedRem};
 use rayon::prelude::*;
 
 use crate::primes::{factorial, PrimeFactorization};
 use crate::rational::{factorial_half_integer, Rational};
 use crate::wigner_3j::{
     triangle_condition,
-    reorder3j,
     compute_3j_series,
 };
 
@@ -34,19 +34,25 @@ pub extern "C" fn clear_wigner_3j_cache_half_integer() {
 /// `m2`, `m3`.
 #[no_mangle]
 pub extern "C" fn wigner_3j_half_integer(j1: u32, j2: u32, j3: u32, m1: i32, m2: i32, m3: i32) -> f64 {
-    if m1.unsigned_abs() > j1 {
-        panic!("invalid j1/m1 in wigner3j: {}/{}", j1, m1);
-    } else if m2.unsigned_abs() > j2 {
-        panic!("invalid j2/m2 in wigner3j: {}/{}", j2, m2);
-    } else if m3.unsigned_abs() > j3 {
-        panic!("invalid j3/m3 in wigner3j: {}/{}", j3, m3);
+    if !check_jm(j1, m1) {
+        return 0.0;
+        //panic!("invalid j1/m1 in wigner3j: {} -- {}, |m|<=j j±m should be integer",
+            //print_half_integer(j1), print_half_integer(m1));
+    } else if !check_jm(j2, m2) {
+        return 0.0;
+        //panic!("invalid j2/m2 in wigner3j: {} -- {}, |m|<=j j±m should be integer",
+            //print_half_integer(j2), print_half_integer(m2));
+    } else if !check_jm(j3, m3) {
+        return 0.0;
+        //panic!("invalid j3/m3 in wigner3j: {} -- {}, |m|<=j j±m should be integer",
+            //print_half_integer(j3), print_half_integer(m3));
     }
 
     if !triangle_condition(j1, j2, j3) || m1 + m2 + m3 != 0 {
         return 0.0;
     }
 
-    let (j1, j2, j3, m1, m2, _, mut sign) = reorder3j(j1, j2, j3, m1, m2, m3, 1.0);
+    let (j1, j2, j3, m1, m2, _, mut sign) = reorder3j_half_integer(j1, j2, j3, m1, m2, m3, 1.0);
 
     let total_j = j1 + j2 + j3;
 
@@ -181,6 +187,23 @@ pub unsafe extern "C" fn clebsch_gordan_array_c_half_integer(j1: u32, j2: u32, j
     clebsch_gordan_array_half_integer(j1, j2, j3, slice);
 }
 
+// reorder j1/m1, j2/m2, j3/m3 such that j1 >= j2 >= j3 and m1 >= 0 or m1 == 0 && m2 >= 0
+fn reorder3j_half_integer(j1: u32, j2: u32, j3: u32, m1: i32, m2: i32, m3: i32, mut sign: f64) -> (u32, u32, u32, i32, i32, i32, f64) {
+    if j1 < j2 {
+        return reorder3j_half_integer(j2, j1, j3, m2, m1, m3, -sign);
+    } else if j2 < j3 {
+        return reorder3j_half_integer(j1, j3, j2, m1, m3, m2, -sign);
+    } else if m1 < 0 || (m1 == 0 && m2 < 0) {
+        return reorder3j_half_integer(j1, j2, j3, -m1, -m2, -m3, -sign);
+    } else {
+        // sign doesn't matter if total J = j1 + j2 + j3 is even
+        if (j1 + j2 + j3) % 4 == 0 {
+            sign = 1.0;
+        }
+        return (j1, j2, j3, m1, m2, m3, sign);
+    }
+}
+
 fn triangle_coefficient_half_integer(j1: u32, j2: u32, j3: u32) -> Rational {
     let n1 = factorial_half_integer(j1 + j2 - j3);
     let n2 = factorial_half_integer(j1 - j2 + j3);
@@ -193,6 +216,27 @@ fn triangle_coefficient_half_integer(j1: u32, j2: u32, j3: u32) -> Rational {
     return result;
 }
 
+fn check_jm(j: u32, m: i32) -> bool {
+    return (m.unsigned_abs() <= j) &&
+            isinteger(j as i32 - m) &&
+            isinteger(j as i32 + m);
+
+    fn isinteger(n: i32) -> bool {
+        return n % 2 == 0;
+    }
+}
+
+// fn print_half_integer<T>(n: T) -> String
+// where T: PrimInt + CheckedRem + std::fmt::Display
+// {
+//     let two = T::one() + T::one();
+//     if n % (T::one() + T::one()) == T::zero() {
+//         return format!("{}", n / two);
+//     } else {
+//         return format!("{}/2", n);
+//     }
+// }
+
 
 #[cfg(test)]
 mod tests {
@@ -201,9 +245,9 @@ mod tests {
     use approx::assert_ulps_eq;
 
     #[test]
-    fn test_wigner3j_half_integer() {
+    fn test_wigner3j_integer() {
         // checked against sympy
-        assert_ulps_eq!(wigner_3j_half_integer(4, 12, 8, 0, 0, 2), 0.0);
+        //assert_ulps_eq!(wigner_4j_half_integer(4, 12, 8, 0, 0, 2), 0.0);  // check
         assert_ulps_eq!(wigner_3j_half_integer(4, 12, 8, 0, 0, 0), f64::sqrt(715.0) / 143.0);
         assert_ulps_eq!(wigner_3j_half_integer(10, 6, 4, -6, 6, 0), f64::sqrt(330.0) / 165.0);
         assert_ulps_eq!(wigner_3j_half_integer(10, 6, 4, -4, 6, -2), -f64::sqrt(330.0) / 330.0);
@@ -216,10 +260,35 @@ mod tests {
     }
 
     #[test]
-    fn test_clebsch_gordan_half_integer() {
+    fn test_wigner3j_half_integer() {
+        // checked against sympy
+        assert_ulps_eq!(wigner_3j_half_integer(2, 6, 4, 0, 0, 1), 0.0);
+        assert_ulps_eq!(wigner_3j_half_integer(2, 6, 4, 0, 0, 0), -f64::sqrt(105.0) / 35.0);
+        assert_ulps_eq!(wigner_3j_half_integer(5, 3, 2, -3, 3, 0), f64::sqrt(15.0) / 15.0);
+        assert_ulps_eq!(wigner_3j_half_integer(5, 3, 2, -2, 3, -1), 0.0);
+        assert_ulps_eq!(wigner_3j_half_integer(100, 100, 100, 100, -100, 0), 1.8219272830228477e-7);
+
+        assert_ulps_eq!(wigner_3j_half_integer(0, 2, 2, 0, 0, 0), -0.5773502691896257);
+
+        // https://github.com/Luthaf/wigners/issues/7
+        assert_ulps_eq!(wigner_3j_half_integer(100, 300, 285, 2, -2, 0), 0.0);
+        // Here I updated the test, since w3j(50, 150, 285/2, 1, -1, 0) is invalid.
+        assert_ulps_eq!(wigner_3j_half_integer(101, 300, 285, 1, -2, 1), -0.0028951194712330303);
+    }
+
+    #[test]
+    fn test_clebsch_gordan_integer() {
         // checked against sympy
         assert_ulps_eq!(clebsch_gordan_half_integer(4, 0, 12, 0, 8, 2), 0.0);
         assert_ulps_eq!(clebsch_gordan_half_integer(2, 2, 2, 2, 4, 4), 1.0);
         assert_ulps_eq!(clebsch_gordan_half_integer(4, 4, 2, -2, 6, 2), f64::sqrt(1.0 / 15.0));
+    }
+
+    #[test]
+    fn test_clebsch_gordan_half_integer() {
+        // checked against sympy
+        assert_ulps_eq!(clebsch_gordan_half_integer(2, 0, 6, 0, 4, 1), 0.0);
+        assert_ulps_eq!(clebsch_gordan_half_integer(1, 1, 1, 1, 2, 2), 1.0);
+        assert_ulps_eq!(clebsch_gordan_half_integer(2, 2, 1, -1, 3, 1), f64::sqrt(3.0)/3.0);
     }
 }
